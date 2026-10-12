@@ -6,7 +6,7 @@
 // lalu menentukan koordinat (EXIF/OCR/manual), mencocokkan zona, dan menyimpan.
 import { Request, Response, NextFunction } from "express";
 import AnalysisService from "../service/analysis.service.js";
-import { readCoordinatesFromImage } from "../service/ocr.service.js";
+import { readCoordinatesFromImage, parseCoordinatesFromText } from "../service/ocr.service.js";
 import type {
   ResolveInput,
   PersistAnalysisInput,
@@ -63,11 +63,18 @@ class AnalysisController {
       const exif = photoBuffer ? await AnalysisService.readExifGps(photoBuffer) : null;
       const hasExif = !!(exif?.present && exif.latlon);
 
-      // 2) OCR hanya bila EXIF kosong, manual kosong, dan ada foto (cadangan terakhir).
-      if (!hasExif && !manualLatLon && photoBuffer) {
-        const ocr = await readCoordinatesFromImage(photoBuffer);
-        ocrLatLon = ocr.latlon;
-        ocrRawText = ocr.rawText;
+      // 2) OCR hanya bila EXIF & manual kosong. Teks dibaca di browser (FE) karena
+      //    tesseract di Vercel menggantung saat memuat file bahasa; backend cukup
+      //    mem-parse teksnya. OCR backend hanya cadangan di luar Vercel (lokal).
+      if (!hasExif && !manualLatLon) {
+        if (typeof body.ocrText === "string" && body.ocrText.trim()) {
+          ocrRawText = body.ocrText.slice(0, 5000); // batasi input dari klien
+          ocrLatLon = parseCoordinatesFromText(ocrRawText);
+        } else if (photoBuffer && !process.env.VERCEL) {
+          const ocr = await readCoordinatesFromImage(photoBuffer);
+          ocrLatLon = ocr.latlon;
+          ocrRawText = ocr.rawText;
+        }
       }
 
       // RESOLVER memakai urutan yang sama (EXIF -> OCR -> manual).

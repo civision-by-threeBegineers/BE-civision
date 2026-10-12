@@ -107,6 +107,7 @@ export interface AnalyzeBody {
   mediaId: string;
   detections?: RawDetection[];       // hasil deteksi ONNX dari frontend
   manualLatLon?: LatLon | null;      // koordinat manual (opsional)
+  ocrText?: string | null;           // teks overlay koordinat hasil OCR di browser (opsional)
   detectorMode?: string;
 }
 
