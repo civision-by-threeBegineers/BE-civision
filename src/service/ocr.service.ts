@@ -86,18 +86,28 @@ function readJpegSize(buf: Buffer): { width: number; height: number } | null {
 // atau worker error TIDAK boleh menggagalkan upload, apalagi mematikan server.
 // tesseract.js v7 melempar error dari dalam event handler worker kalau tidak ada
 // errorHandler -> jadi uncaughtException. Karena itu errorHandler wajib dipasang.
+// tesseract.js menelan error saat memuat file bahasa, sehingga createWorker bisa
+// tidak pernah selesai (mis. file bahasa tak terunduh). Batasi waktunya.
+const OCR_LOAD_TIMEOUT_MS = 25_000;
+
 export async function readCoordinatesFromImage(
   image: Buffer | string
 ): Promise<{ latlon: LatLon | null; rawText: string }> {
+  // Di Vercel filesystem read-only kecuali /tmp, jadi cache file bahasa ke /tmp.
+  // langPath (SUMBER file bahasa) dibiarkan default CDN; mengarahkannya ke folder
+  // kosong membuat load bahasa gagal dan request menggantung sampai 504.
+  const errorHandler = (e: unknown) => console.warn("[ocr] worker error:", e);
+  const options = process.env.VERCEL ? { errorHandler, cachePath: "/tmp" } : { errorHandler };
+  const pending = createWorker("eng", undefined, options);
   let worker: Awaited<ReturnType<typeof createWorker>> | null = null;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    // Di serverless (Vercel) filesystem read-only kecuali /tmp. Tesseract perlu
-    // menulis cache + file bahasa, jadi arahkan ke /tmp. Di lokal pakai default.
-    const onVercel = !!process.env.VERCEL;
-    const options = onVercel
-      ? { errorHandler: (e: unknown) => console.warn("[ocr] worker error:", e), langPath: "/tmp", cachePath: "/tmp" }
-      : { errorHandler: (e: unknown) => console.warn("[ocr] worker error:", e) };
-    worker = await createWorker("eng", undefined, options);
+    worker = await Promise.race([
+      pending,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`OCR belum siap setelah ${OCR_LOAD_TIMEOUT_MS} ms`)), OCR_LOAD_TIMEOUT_MS);
+      }),
+    ]);
 
     // Overlay koordinat Timemark ada di 1/3 bawah foto. OCR seluruh foto yang ramai
     // (gerobak, jalan) menghasilkan teks acak, jadi batasi ke area bawah via rectangle
@@ -113,8 +123,11 @@ export async function readCoordinatesFromImage(
     return { latlon: parseCoordinatesFromText(rawText), rawText };
   } catch (err: any) {
     console.warn("[ocr] gagal membaca gambar, dilewati:", err?.message ?? err);
+    // shortcut: worker yang menggantung selamanya tidak bisa dihentikan (tesseract tidak memberi handle); cukup selama kejadiannya jarang.
+    if (!worker) pending.then((w) => w.terminate(), () => {});
     return { latlon: null, rawText: "" };
   } finally {
+    clearTimeout(timer);
     if (worker) {
       try { await worker.terminate(); } catch { /* abaikan */ }
     }
