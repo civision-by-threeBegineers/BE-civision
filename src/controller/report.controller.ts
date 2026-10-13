@@ -37,7 +37,7 @@ class ReportController {
       if (!data) {
         return res.status(404).json({ ok: false, message: "Laporan tidak ditemukan." });
       }
-      ReportService.streamReportPdf(data, res);
+      await ReportService.streamReportPdf(data, res);
     } catch (err) {
       next(err);
     }

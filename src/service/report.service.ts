@@ -71,60 +71,161 @@ function formatJakarta(t: Date): { date: string; timestamp: string } {
   };
 }
 
-// Render laporan langsung ke response (di-stream sebagai file PDF unduhan).
-export function streamReportPdf(data: ReportData, res: Response) {
-  const doc = new PDFDocument({ size: "A4", margin: 50 });
+// Warna tema (ungu) sesuai desain laporan.
+const PURPLE = "#5a50c3";
+const PURPLE_LABEL = "#8b82d6";  // sel label (kiri)
+const BORDER = "#d9d6f2";        // garis border sel nilai
+const GRAY = "#6b7280";
 
+// Nama bulan Indonesia untuk tanggal "27 September 2026".
+const BULAN_ID = [
+  "Januari", "Februari", "Maret", "April", "Mei", "Juni",
+  "Juli", "Agustus", "September", "Oktober", "November", "Desember",
+];
+
+// Ubah "DD/MM/YYYY" (dari formatJakarta) jadi "D Bulan YYYY".
+function tanggalPanjang(ddmmyyyy: string): string {
+  const [d, m, y] = ddmmyyyy.split("/");
+  const bulan = BULAN_ID[Number(m) - 1] ?? m;
+  return `${Number(d)} ${bulan} ${y}`;
+}
+
+// Status mentah (unverified/valid/invalid) -> label berhuruf besar di awal.
+function statusLabel(status: string): string {
+  if (!status) return "-";
+  return status.charAt(0).toUpperCase() + status.slice(1);
+}
+
+// Ambil byte gambar bukti dari URL (Supabase) atau file lokal. Kembalikan null
+// bila gagal; serverless (Vercel) tidak punya file lokal, jadi URL yang utama.
+async function loadEvidence(data: ReportData): Promise<Buffer | null> {
+  const url = data.evidenceUrl;
+  if (url && /^https?:\/\//i.test(url)) {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      if (res.ok) return Buffer.from(await res.arrayBuffer());
+    } catch {
+      /* abaikan -> fallback / tidak tersedia */
+    }
+  }
+  // Fallback file lokal (dev): evidencePath/evidenceUrl berupa path relatif.
+  const local = data.evidencePath ?? (url && !/^https?:\/\//i.test(url) ? url : null);
+  if (local) {
+    const p = path.resolve(process.cwd(), local);
+    if (fs.existsSync(p)) {
+      try { return fs.readFileSync(p); } catch { /* abaikan */ }
+    }
+  }
+  return null;
+}
+
+// Render laporan langsung ke response (di-stream sebagai file PDF unduhan).
+// Async karena gambar bukti diambil via fetch (dari Supabase) sebelum dirender.
+export async function streamReportPdf(data: ReportData, res: Response) {
+  // Ambil gambar lebih dulu (perlu await) sebelum menulis PDF.
+  const evidence = await loadEvidence(data);
+
+  const doc = new PDFDocument({ size: "A4", margin: 50 });
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader("Content-Disposition", `attachment; filename="laporan-${data.id}.pdf"`);
   doc.pipe(res);
 
-  // Judul
-  doc.fontSize(18).text("LAPORAN PELANGGARAN PKL", { align: "center" });
-  doc.moveDown(0.3);
-  doc.fontSize(11).fillColor("gray").text(`Kepada: ${data.targetAgency}`, { align: "center" });
-  doc.moveDown(1);
-  doc.fillColor("black");
+  const left = doc.page.margins.left;             // 50
+  const right = doc.page.width - doc.page.margins.right; // 545
+  const contentWidth = right - left;
 
-  // Garis pemisah
-  doc.moveTo(50, doc.y).lineTo(545, doc.y).stroke();
-  doc.moveDown(0.8);
+  // ---- Header: judul ungu + logo bulat di kanan ----
+  doc.fillColor(PURPLE).font("Helvetica-Bold").fontSize(28);
+  doc.text("Laporan", left, 55);
+  doc.text("Pelanggaran PKL", left, doc.y);
+  const titleBottom = doc.y;
 
-  // Detail (label : nilai)
-  const row = (label: string, value: string) => {
-    doc.fontSize(11).fillColor("gray").text(label, { continued: true, width: 150 });
-    doc.fillColor("black").text("  " + value);
-    doc.moveDown(0.3);
-  };
-  row("ID Pelanggaran", data.id);
-  row("Lokasi", data.location);
-  row("Koordinat", `${data.coordinate.lat}, ${data.coordinate.lng}`);
-  row("Zona Terlarang", data.zoneName ?? "-");
-  row("Tanggal", data.date);
-  row("Waktu", data.timestamp);
-  row("Status", data.status);
-  row("Keyakinan AI", `${(data.confidence * 100).toFixed(1)}%`);
-  row("Media", data.mediaName ?? "-");
-
-  doc.moveDown(0.8);
-  doc.moveTo(50, doc.y).lineTo(545, doc.y).stroke();
-  doc.moveDown(0.8);
-
-  // Bukti visual (bila file ada)
-  doc.fontSize(12).fillColor("black").text("Bukti Visual:", { underline: true });
-  doc.moveDown(0.5);
-  let imgPath: string | null = null;
-  if (data.evidencePath) {
-    imgPath = path.resolve(process.cwd(), data.evidencePath);
-  }
-  if (imgPath && fs.existsSync(imgPath)) {
+  // Logo CiVision di kanan atas. Pakai file bila ada; selain itu lingkaran+"C".
+  const logoSize = 44, logoX = right - logoSize, logoY = 48;
+  const logoPath = path.resolve(process.cwd(), "src/assets/logo.png");
+  if (fs.existsSync(logoPath)) {
     try {
-      doc.image(imgPath, { fit: [480, 360], align: "center" });
+      doc.image(logoPath, logoX, logoY, { width: logoSize, height: logoSize });
     } catch {
-      doc.fontSize(10).fillColor("red").text("(Gagal memuat gambar bukti.)");
+      doc.circle(logoX + logoSize / 2, logoY + logoSize / 2, logoSize / 2).fill(PURPLE);
     }
   } else {
-    doc.fontSize(10).fillColor("gray").text("(Bukti visual tidak tersedia.)");
+    const cr = logoSize / 2, cx = logoX + cr, cy = logoY + cr;
+    doc.circle(cx, cy, cr).fill(PURPLE);
+    doc.fillColor("white").font("Helvetica-Bold").fontSize(22).text("C", cx - 7, cy - 12);
+  }
+
+  doc.fillColor(GRAY).font("Helvetica").fontSize(11);
+  doc.text(`Kepada: ${data.targetAgency},`, left, titleBottom + 8);
+  doc.moveDown(0.6);
+  doc.moveTo(left, doc.y).lineTo(right, doc.y).strokeColor(BORDER).lineWidth(1).stroke();
+  doc.moveDown(0.8);
+
+  // ---- Helper: judul seksi + tabel 2 kolom ----
+  const labelW = 150;        // lebar kolom label (kiri)
+  const rowH = 26;
+
+  const section = (title: string) => {
+    doc.moveDown(0.3);
+    doc.fillColor(PURPLE).font("Helvetica-Bold").fontSize(13).text(title, left, doc.y);
+    doc.moveDown(0.4);
+  };
+
+  const table = (rows: [string, string][]) => {
+    for (const [label, value] of rows) {
+      const y = doc.y;
+      // sel label (kiri, ungu muda)
+      doc.rect(left, y, labelW, rowH).fill(PURPLE_LABEL);
+      doc.fillColor("white").font("Helvetica").fontSize(10)
+        .text(label, left + 10, y + 8, { width: labelW - 16 });
+      // sel nilai (kanan, border tipis)
+      doc.rect(left + labelW, y, contentWidth - labelW, rowH).lineWidth(1).strokeColor(BORDER).stroke();
+      doc.fillColor(PURPLE).font("Helvetica").fontSize(10)
+        .text(value, left + labelW + 10, y + 8, { width: contentWidth - labelW - 16 });
+      doc.y = y + rowH;
+    }
+    doc.moveDown(0.6);
+  };
+
+  // ---- I. Identitas Laporan ----
+  section("I. Identitas Laporan");
+  table([
+    ["ID Pelanggaran", data.id],
+    ["Tanggal", tanggalPanjang(data.date)],
+    ["Waktu", `${data.timestamp} WIB`],
+  ]);
+
+  // ---- II. Data Pelanggaran ----
+  section("II. Data Pelanggaran");
+  table([
+    ["Lokasi (Alamat)", data.location],
+    ["Zona Terlarang", data.zoneName ?? "-"],
+    ["Koordinat", `${data.coordinate.lat}, ${data.coordinate.lng}`],
+  ]);
+
+  // ---- III. Status Verifikasi ----
+  section("III. Status Verifikasi");
+  table([
+    ["Status", statusLabel(data.status)],
+    ["Keyakinan AI", `${(data.confidence * 100).toFixed(1)}%`],
+  ]);
+
+  // ---- IV. Bukti Visual ----
+  section("IV. Bukti Visual");
+  const linkY = doc.y;
+  if (evidence) {
+    try {
+      doc.image(evidence, left, doc.y, { fit: [220, 180] });
+    } catch {
+      doc.fillColor("red").font("Helvetica").fontSize(10).text("(Gagal memuat gambar bukti.)", left, doc.y);
+    }
+    // Tautan "Link" ke foto asli (bila URL http).
+    if (data.evidenceUrl && /^https?:\/\//i.test(data.evidenceUrl)) {
+      doc.fillColor(PURPLE).font("Helvetica").fontSize(10)
+        .text("Link", left + 230, linkY, { link: data.evidenceUrl, underline: true });
+    }
+  } else {
+    doc.fillColor(GRAY).font("Helvetica").fontSize(10).text("(Bukti visual tidak tersedia.)", left, doc.y);
   }
 
   doc.end();
@@ -210,6 +311,8 @@ class ReportService {
       status: v.status,
       confidence: v.confidence,
       evidencePath: v.annotatedFrames[0]?.imagePath ?? null,
+      // Foto bukti: frame beranotasi (jarang ada) atau URL publik foto asli di Supabase.
+      evidenceUrl: v.annotatedFrames[0]?.imagePath ?? v.analysis?.media?.storagePath ?? null,
       targetAgency: "Satpol PP / Dishub",
     };
   }

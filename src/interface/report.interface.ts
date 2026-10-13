@@ -10,7 +10,8 @@ export interface ReportData {
   zoneName: string | null;
   status: string;
   confidence: number;
-  evidencePath: string | null;
+  evidencePath: string | null;   // path file lokal (lama) - dipakai bila ada
+  evidenceUrl: string | null;    // URL publik foto bukti di Supabase (dipakai di Vercel)
   targetAgency: string;
 }
 
