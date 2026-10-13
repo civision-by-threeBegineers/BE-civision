@@ -7,7 +7,8 @@ class DashboardRepository {
   static findMappableViolations() {
     return prisma.violation.findMany({
       where: { status: { not: "invalid" }, locationStatus: "matched" },
-      include: { annotatedFrames: true, zone: true },
+      // media disertakan agar popup bisa pakai foto asli (Supabase) bila tidak ada frame beranotasi.
+      include: { annotatedFrames: true, zone: true, analysis: { include: { media: true } } },
       orderBy: { createdAt: "desc" },
     });
   }

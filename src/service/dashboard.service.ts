@@ -30,7 +30,8 @@ class DashboardService {
         confidence: v.confidence,
         time: v.createdAt,
         address: v.address ?? null,
-        evidenceUrl: v.annotatedFrames[0]?.imagePath ?? null,
+        // frame beranotasi bila ada; selain itu URL publik foto asli di Supabase.
+        evidenceUrl: v.annotatedFrames[0]?.imagePath ?? v.analysis?.media?.storagePath ?? null,
       },
     }));
 
