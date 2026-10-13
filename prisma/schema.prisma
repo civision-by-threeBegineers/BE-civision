@@ -38,8 +38,13 @@ model Analysis {
   photoCount    Int         @default(0)
   videoDuration Float       @default(0)
   analyzedAt    DateTime    @default(now())
+  // SHA-256 isi foto yang dianalisis. Dipakai untuk menolak analisis duplikat
+  // (foto sama + koordinat sama). null untuk data lama / video / foto gagal diunduh.
+  photoHash     String?
   violations    Violation[]
   report        Report?
+
+  @@index([photoHash])
 }
 
 model Violation {

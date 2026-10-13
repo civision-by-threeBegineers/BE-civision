@@ -6,6 +6,7 @@
 //   - analysisPersist    : simpan Analysis + Violation secara atomik
 // Semua bagian ini hanya dipakai oleh AnalysisController.
 // Akses database didelegasikan ke AnalysisRepository.
+import crypto from "node:crypto";
 import exifr from "exifr";
 import booleanPointInPolygon from "@turf/boolean-point-in-polygon";
 import { point as turfPoint, polygon as turfPolygon } from "@turf/helpers";
@@ -22,6 +23,7 @@ import type {
   MatchResult,
   PersistAnalysisInput,
   PersistResult,
+  DuplicateMatch,
 } from "../interface/analysis.interface.js";
 
 // ============================================================================
@@ -173,6 +175,11 @@ export async function reverseGeocode(latlon: LatLon): Promise<string | null> {
 
 const CONFIDENCE_THRESHOLD = 0.5; // Requirement 4.3
 
+// Toleransi "koordinat sama" saat cek duplikat: 0.000001 derajat (~0,1 m).
+// Foto yang sama menghasilkan koordinat EXIF/OCR yang identik; toleransi kecil ini
+// hanya untuk menyerap selisih pembulatan angka desimal.
+const DUPLICATE_COORD_EPS = 0.000001;
+
 class AnalysisService {
   static readExifGps = readExifGps;
   static isWithinRegion = isWithinRegion;
@@ -209,6 +216,26 @@ class AnalysisService {
       console.warn("[analysis] gagal download media:", err?.message ?? err);
       return null;
     }
+  }
+
+  // Sidik jari isi foto (SHA-256, hex). File yang byte-nya identik -> hash sama.
+  static hashPhoto(photo: Buffer): string {
+    return crypto.createHash("sha256").update(photo).digest("hex");
+  }
+
+  // Cek duplikat: foto yang sama (photoHash sama) di koordinat yang sama sudah
+  // pernah menghasilkan pelanggaran. Mengembalikan pelanggaran lama, atau null.
+  static async findDuplicate(photoHash: string, latlon: LatLon): Promise<DuplicateMatch | null> {
+    const found = await AnalysisRepository.findViolationByPhotoAndCoordinate(
+      photoHash,
+      latlon.lat,
+      latlon.lon,
+      DUPLICATE_COORD_EPS,
+    );
+    if (!found) {
+      return null;
+    }
+    return { analysisId: found.analysisId, violationId: found.id };
   }
 
   // Simpan satu Analysis beserta Violation-nya secara atomik.
@@ -272,6 +299,7 @@ class AnalysisService {
     const analysis = await AnalysisRepository.createAnalysisWithViolations(
       {
         mediaId: input.mediaId,
+        photoHash: input.photoHash ?? null,
         detectorMode: input.detectorMode ?? "proxy",
         photoCount: input.photoCount ?? 0,
         videoDuration: input.videoDuration ?? 0,

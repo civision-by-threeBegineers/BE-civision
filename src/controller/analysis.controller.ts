@@ -1,12 +1,12 @@
-// Controller Analisis: menerima hasil deteksi (ONNX dari frontend) + OCR koordinat
-// -> cek zona -> simpan Analysis+Violation.
+// Controller Analisis: menerima hasil deteksi (ONNX dari frontend) + teks OCR (dari frontend)
+// -> tentukan koordinat -> cek duplikat -> cek zona -> simpan Analysis+Violation.
 //
-// Deteksi gerobak dilakukan di FRONTEND pakai model ONNX (onnxruntime-web).
-// Backend TIDAK mendeteksi; backend menerima "detections" yang sudah jadi,
+// Deteksi gerobak DAN OCR dilakukan di FRONTEND. Backend TIDAK mendeteksi dan
+// TIDAK menjalankan OCR; backend menerima "detections" + "ocrText" yang sudah jadi,
 // lalu menentukan koordinat (EXIF/OCR/manual), mencocokkan zona, dan menyimpan.
 import { Request, Response, NextFunction } from "express";
 import AnalysisService from "../service/analysis.service.js";
-import { readCoordinatesFromImage, parseCoordinatesFromText } from "../service/ocr.service.js";
+import { parseCoordinatesFromText } from "../service/ocr.service.js";
 import type {
   ResolveInput,
   PersistAnalysisInput,
@@ -17,8 +17,8 @@ import type {
 
 class AnalysisController {
   // POST /api/analysis
-  // multipart: field "photo" (opsional, untuk baca EXIF/OCR koordinat)
-  // field "payload" (JSON) ATAU body JSON: { mediaId, detections, manualLatLon? }
+  // multipart: field "photo" (opsional, untuk baca EXIF koordinat)
+  // field "payload" (JSON) ATAU body JSON: { mediaId, detections, ocrText?, manualLatLon? }
   static async analyze(req: Request, res: Response, next: NextFunction) {
     try {
       // Body bisa dikirim sebagai field "payload" (string JSON, saat multipart)
@@ -42,6 +42,7 @@ class AnalysisController {
 
       // Foto boleh dikirim langsung (multipart "photo"), atau diambil dari storage
       // berdasarkan mediaId (untuk file besar yang di-upload langsung ke Supabase).
+      // Foto dipakai untuk baca EXIF dan untuk sidik jari (hash) cek duplikat.
       let photoBuffer = (req as any).file?.buffer as Buffer | undefined;
       if (!photoBuffer && media.mediaType === "photo") {
         photoBuffer = (await AnalysisService.loadMediaBuffer(media.storagePath)) ?? undefined;
@@ -53,39 +54,42 @@ class AnalysisController {
         detections = body.detections;
       }
 
-      // KOORDINAT (urutan: EXIF -> OCR -> manual). OCR itu mahal (dan di Vercel
-      // perlu /tmp), jadi hanya dijalankan bila EXIF & manual sama-sama tidak ada.
+      // KOORDINAT (urutan: EXIF -> OCR -> manual).
+      // OCR dijalankan di browser; backend cukup mem-parse teks hasilnya.
       const manualLatLon = body.manualLatLon ?? null;
       let ocrLatLon: LatLon | null = null;
       let ocrRawText = "";
-
-      // 1) EXIF dulu bila ada foto.
-      const exif = photoBuffer ? await AnalysisService.readExifGps(photoBuffer) : null;
-      const hasExif = !!(exif?.present && exif.latlon);
-
-      // 2) OCR hanya bila EXIF & manual kosong. Teks dibaca di browser (FE) karena
-      //    tesseract di Vercel menggantung saat memuat file bahasa; backend cukup
-      //    mem-parse teksnya. OCR backend hanya cadangan di luar Vercel (lokal).
-      if (!hasExif && !manualLatLon) {
-        if (typeof body.ocrText === "string" && body.ocrText.trim()) {
-          ocrRawText = body.ocrText.slice(0, 5000); // batasi input dari klien
-          ocrLatLon = parseCoordinatesFromText(ocrRawText);
-        } else if (photoBuffer && !process.env.VERCEL) {
-          const ocr = await readCoordinatesFromImage(photoBuffer);
-          ocrLatLon = ocr.latlon;
-          ocrRawText = ocr.rawText;
-        }
+      if (typeof body.ocrText === "string" && body.ocrText.trim()) {
+        ocrRawText = body.ocrText.slice(0, 5000); // batasi input dari klien
+        ocrLatLon = parseCoordinatesFromText(ocrRawText);
       }
 
-      // RESOLVER memakai urutan yang sama (EXIF -> OCR -> manual).
       const resolveInput: ResolveInput = { ocrLatLon, manualLatLon };
       if (photoBuffer) resolveInput.photo = photoBuffer;
       const resolved = await AnalysisService.resolveCoordinate(resolveInput);
+
+      // CEK DUPLIKAT: foto yang sama (isi file identik) di koordinat yang sama
+      // sudah pernah menghasilkan pelanggaran -> jangan simpan apa pun lagi.
+      let photoHash: string | null = null;
+      if (photoBuffer) {
+        photoHash = AnalysisService.hashPhoto(photoBuffer);
+      }
+      if (photoHash && resolved.latlon) {
+        const duplicate = await AnalysisService.findDuplicate(photoHash, resolved.latlon);
+        if (duplicate) {
+          return res.status(409).json({
+            ok: false,
+            message: "Foto yang sama di koordinat yang sama sudah pernah dianalisis.",
+            duplicateOf: duplicate,
+          });
+        }
+      }
 
       // SIMPAN: cek zona + buat Violation
       const persistInput: PersistAnalysisInput = {
         mediaId: body.mediaId,
         photoCount: 1,
+        photoHash,
         units: [
           {
             detections,

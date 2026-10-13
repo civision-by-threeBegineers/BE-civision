@@ -88,6 +88,7 @@ export interface PersistAnalysisInput {
   mediaId: string;
   detectorMode?: string;              // default "proxy"
   units: AnalysisUnitInput[];         // foto = 1 unit; video = banyak unit
+  photoHash?: string | null;          // SHA-256 isi foto (untuk cek duplikat); null bila tidak ada foto
   photoCount?: number;
   videoDuration?: number;
 }
@@ -115,8 +116,15 @@ export interface AnalyzeBody {
 // Repository (src/repository/analysis.repository.ts)
 // ---------------------------------------------------------------------------
 
+// Pelanggaran lama yang dianggap duplikat (foto sama + koordinat sama).
+export interface DuplicateMatch {
+  analysisId: string;
+  violationId: string;
+}
+
 export interface AnalysisCreateData {
   mediaId: string;
+  photoHash: string | null;
   detectorMode: string;
   photoCount: number;
   videoDuration: number;

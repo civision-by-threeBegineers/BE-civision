@@ -26,6 +26,9 @@ AI (Wilson) = "mata" (mendeteksi). Frontend (Shavelina) = "wajah" (yang dilihat 
 
 3. Backend TERIMA hasil AI -> POST /api/analysis
    - Baca koordinat foto: GPS EXIF -> OCR -> manual (berjenjang)
+     (OCR dijalankan di FRONTEND; backend hanya mem-parse teks "ocrText")
+   - Cek duplikat: foto yang sama (hash SHA-256 isi file) di koordinat yang sama
+     sudah pernah jadi pelanggaran -> tolak 409, TIDAK ada yang disimpan
    - Cek: koordinat masuk zona terlarang? (perhitungan point-in-polygon)
    - Kalau YA -> catat PELANGGARAN (status awal: unverified / abu-abu)
    - Simpan ke database

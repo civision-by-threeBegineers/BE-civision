@@ -15,6 +15,26 @@ class AnalysisRepository {
     return prisma.mediaFile.findUnique({ where: { id } });
   }
 
+  // Cari satu pelanggaran lama dari foto yang sama (photoHash sama) di sekitar
+  // koordinat yang sama (selisih <= eps derajat). Semua status dihitung, termasuk
+  // invalid, supaya pelanggaran yang sudah ditolak petugas tidak muncul lagi.
+  static findViolationByPhotoAndCoordinate(
+    photoHash: string,
+    lat: number,
+    lng: number,
+    eps: number,
+  ) {
+    return prisma.violation.findFirst({
+      where: {
+        analysis: { photoHash },
+        lat: { gte: lat - eps, lte: lat + eps },
+        lng: { gte: lng - eps, lte: lng + eps },
+      },
+      select: { id: true, analysisId: true },
+      orderBy: { createdAt: "asc" },
+    });
+  }
+
   // Buat Analysis + semua Violation-nya secara berurutan (TANPA $transaction).
   //
   // Catatan: sebelumnya ini dibungkus prisma.$transaction (interaktif) agar atomik.
@@ -32,6 +52,7 @@ class AnalysisRepository {
     const analysis = await prisma.analysis.create({
       data: {
         mediaId: analysisData.mediaId,
+        photoHash: analysisData.photoHash,
         detectorMode: analysisData.detectorMode,
         status: "done",
         progress: 100,
