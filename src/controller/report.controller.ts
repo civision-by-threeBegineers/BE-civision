@@ -37,7 +37,9 @@ class ReportController {
       if (!data) {
         return res.status(404).json({ ok: false, message: "Laporan tidak ditemukan." });
       }
-      await ReportService.streamReportPdf(data, res);
+      // ?inline=1 -> tampilkan di browser (preview); selain itu paksa unduh.
+      const inline = req.query.inline === "1" || req.query.inline === "true";
+      await ReportService.streamReportPdf(data, res, inline);
     } catch (err) {
       next(err);
     }

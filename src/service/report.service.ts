@@ -119,15 +119,17 @@ async function loadEvidence(data: ReportData): Promise<Buffer | null> {
   return null;
 }
 
-// Render laporan langsung ke response (di-stream sebagai file PDF unduhan).
+// Render laporan langsung ke response (di-stream sebagai PDF).
 // Async karena gambar bukti diambil via fetch (dari Supabase) sebelum dirender.
-export async function streamReportPdf(data: ReportData, res: Response) {
+// inline=true -> PDF dibuka di browser (preview); false -> dipaksa unduh.
+export async function streamReportPdf(data: ReportData, res: Response, inline = false) {
   // Ambil gambar lebih dulu (perlu await) sebelum menulis PDF.
   const evidence = await loadEvidence(data);
 
   const doc = new PDFDocument({ size: "A4", margin: 50 });
   res.setHeader("Content-Type", "application/pdf");
-  res.setHeader("Content-Disposition", `attachment; filename="laporan-${data.id}.pdf"`);
+  const disposition = inline ? "inline" : "attachment";
+  res.setHeader("Content-Disposition", `${disposition}; filename="laporan-${data.id}.pdf"`);
   doc.pipe(res);
 
   const left = doc.page.margins.left;             // 50
