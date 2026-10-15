@@ -1,25 +1,34 @@
-// Middleware upload gabungan (multer). Menerima file gambar ATAU video.
-// File disimpan di memori lalu diteruskan ke AI service oleh controller/service.
+// Middleware upload foto (multer). Satu instance untuk semua endpoint yang menerima
+// file lewat backend: POST /api/upload (field "files") dan POST /api/analysis (field "photo").
+// File disimpan di memori (filesystem Vercel read-only), lalu diteruskan ke controller.
 import { Request } from "express";
 import multer from "multer";
-import config from "../config/config.js";
 
-// Terima file bertipe image/* atau video/*. Tolak selain itu.
-function mediaFileFilter(req: Request, file: any, cb: any) {
-  const mimetype: string = file.mimetype || "";
-  if (mimetype.startsWith("image/") || mimetype.startsWith("video/")) {
-    return cb(null, true);
-  }
-  cb(new Error("File harus berupa gambar atau video."));
+// Batas body request Vercel Functions = 4,5 MB untuk SELURUH request (file + field lain
+// + overhead multipart). Batas per foto dibuat 4 MB supaya masih ada sisa ruang untuk
+// field lain (mis. "payload" berisi detections & ocrText). Foto lebih besar dari ini
+// harus lewat alur upload langsung: /api/upload/signed-url -> Supabase -> /api/upload/confirm.
+export const MAX_PHOTO_BYTES = 4 * 1024 * 1024;
+export const MAX_PHOTO_MB = MAX_PHOTO_BYTES / (1024 * 1024);
+
+// Error saat tipe file ditolak. Diterjemahkan errorHandler menjadi 400 JSON.
+export class FileTypeError extends Error {
+  status = 400;
 }
 
-const upload = multer({
+// Hanya terima gambar (image/*).
+function imageFileFilter(req: Request, file: Express.Multer.File, cb: multer.FileFilterCallback) {
+  const mimetype: string = file.mimetype || "";
+  if (mimetype.startsWith("image/")) {
+    return cb(null, true);
+  }
+  cb(new FileTypeError("File harus berupa gambar."));
+}
+
+const photoUpload = multer({
   storage: multer.memoryStorage(),
-  // Pakai batas terbesar (video) agar image maupun video sama-sama lolos.
-  // Validasi ukuran spesifik bisa ditambahkan di controller bila perlu.
-  limits: { fileSize: config.maxVideoBytes },
-  fileFilter: mediaFileFilter,
+  limits: { fileSize: MAX_PHOTO_BYTES },
+  fileFilter: imageFileFilter,
 });
 
-// Ekspor middleware untuk field bernama "files" (bisa banyak file).
-export default upload;
+export default photoUpload;
