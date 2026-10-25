@@ -11,6 +11,8 @@ import type {
   ReportData,
   PaginationParams,
   ReportListResult,
+  ReportSortBy,
+  SortParams,
 } from "../interface/report.interface.js";
 
 // Error validasi laporan (mis. query pagination tidak valid). Controller
@@ -28,6 +30,10 @@ const DEFAULT_PAGE = 1;
 const DEFAULT_PAGE_SIZE = 10;
 const MAX_PAGE_SIZE = 50;
 const INVALID_PAGINATION_MESSAGE = "Parameter page/pageSize tidak valid.";
+
+// Aturan urutan GET /api/reports: hanya kolom whitelist ini yang boleh.
+const SORT_FIELDS: readonly ReportSortBy[] = ["createdAt", "location", "media", "status"];
+const INVALID_SORT_MESSAGE = "Parameter sortBy/sortDir tidak valid.";
 
 // Ubah satu nilai query jadi bilangan bulat positif.
 // - tidak dikirim  -> pakai nilai default
@@ -262,11 +268,24 @@ class ReportService {
     return { page, pageSize };
   }
 
+  // Validasi query ?sortBy=&sortDir=. Lempar ReportError (400) bila tidak valid
+  // (nilai di luar whitelist, huruf besar, atau dikirim 2x). Default createdAt desc.
+  static parseSort(query: { sortBy?: unknown; sortDir?: unknown }): SortParams {
+    const { sortBy = "createdAt", sortDir = "desc" } = query;
+    if (typeof sortBy !== "string" || !(SORT_FIELDS as readonly string[]).includes(sortBy)) {
+      throw new ReportError(INVALID_SORT_MESSAGE);
+    }
+    if (sortDir !== "asc" && sortDir !== "desc") {
+      throw new ReportError(INVALID_SORT_MESSAGE);
+    }
+    return { sortBy: sortBy as ReportSortBy, sortDir };
+  }
+
   // Satu halaman laporan (baris tabel) - SEMUA status ditampilkan.
   // page melebihi totalPages -> reports kosong, pagination tetap diisi (bukan error).
-  static async listTable({ page, pageSize }: PaginationParams): Promise<ReportListResult> {
+  static async listTable({ page, pageSize }: PaginationParams, sort: SortParams): Promise<ReportListResult> {
     const skip = (page - 1) * pageSize;
-    const [violations, totalItems] = await ReportRepository.findAllWithRelations(skip, pageSize);
+    const [violations, totalItems] = await ReportRepository.findAllWithRelations(skip, pageSize, sort);
 
     const reports = violations.map((v) => {
       const { date, timestamp } = formatJakarta(v.createdAt);

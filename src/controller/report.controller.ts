@@ -3,15 +3,16 @@ import { Request, Response, NextFunction } from "express";
 import ReportService, { ReportError } from "../service/report.service.js";
 
 class ReportController {
-  // GET /api/reports?page=1&pageSize=10  -> statistik + 1 halaman tabel laporan
+  // GET /api/reports?page=1&pageSize=10&sortBy=createdAt&sortDir=desc  -> statistik + 1 halaman tabel laporan
   // stats = seluruh data (bukan per halaman). isEmpty = tidak ada data sama sekali.
   static async list(req: Request, res: Response) {
     try {
       const pageParams = ReportService.parsePagination(req.query);
+      const sortParams = ReportService.parseSort(req.query);
 
       const [stats, { reports, pagination }] = await Promise.all([
         ReportService.stats(),
-        ReportService.listTable(pageParams),
+        ReportService.listTable(pageParams, sortParams),
       ]);
 
       return res.json({

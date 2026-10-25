@@ -21,6 +21,14 @@ export interface PaginationParams {
   pageSize: number;  // 1 - 50
 }
 
+// Urutan tabel yang sudah divalidasi (GET /api/reports?sortBy=&sortDir=).
+export type ReportSortBy = "createdAt" | "location" | "media" | "status";
+export type SortDir = "asc" | "desc";
+export interface SortParams {
+  sortBy: ReportSortBy;
+  sortDir: SortDir;
+}
+
 // Metadata pagination di response GET /api/reports.
 export interface PaginationMeta {
   page: number;
